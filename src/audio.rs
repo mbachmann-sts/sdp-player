@@ -127,7 +127,8 @@ pub async fn play(mut stream: Stream) -> anyhow::Result<()> {
                     }
                 }
                 if start.elapsed().as_secs_f32() >= 1.0 {
-                    log::debug!("Audio level: {level:.2}");
+                    let db = 20.0 * level.log10();
+                    log::debug!("Audio level: {db:.2} dB");
                     start = Instant::now();
                     level = 0.0;
                 }
