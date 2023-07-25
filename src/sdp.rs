@@ -1,10 +1,15 @@
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::{
+    fmt, io,
     net::{AddrParseError, IpAddr},
     num::{ParseFloatError, ParseIntError},
+    path::Path,
     str::FromStr,
 };
 use thiserror::Error;
+use tokio::fs;
+use url::Url;
 
 const RTMAP_REGEX: &str = r"rtpmap:([0-9]+) (.+)\/([0-9]+)\/([0-9]+)";
 const RTPMAP_PAYLOAD_ID_GROUPT: usize = 1;
@@ -66,12 +71,23 @@ impl FromStr for RtpMap {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum BitDepth {
     L16,
     L24,
     L32,
     FloatingPoint,
+}
+
+impl fmt::Display for BitDepth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BitDepth::L16 => write!(f, "L16"),
+            BitDepth::L24 => write!(f, "L24"),
+            BitDepth::L32 => write!(f, "L32"),
+            BitDepth::FloatingPoint => write!(f, "Floating Point"),
+        }
+    }
 }
 
 impl BitDepth {
@@ -96,12 +112,16 @@ impl FromStr for BitDepth {
     type Err = SdpError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "L16" => Ok(BitDepth::L16),
-            "L24" => Ok(BitDepth::L24),
-            "L32" => Ok(BitDepth::L32),
-            "Floating Point" => Ok(BitDepth::FloatingPoint),
-            _ => Err(SdpError::FormatError),
+        if s.contains("16") {
+            return Ok(BitDepth::L16);
+        } else if s.contains("24") {
+            return Ok(BitDepth::L24);
+        } else if s.contains("32") {
+            return Ok(BitDepth::L32);
+        } else if s.to_lowercase().contains("float") {
+            return Ok(BitDepth::FloatingPoint);
+        } else {
+            return Err(SdpError::FormatError);
         }
     }
 }
@@ -228,10 +248,14 @@ pub struct Sdp {
     pub channels: u16,             // a(rtpmap) field
 }
 
-pub fn sdp_from_file() {}
+pub async fn sdp_from_url(url: &Url) -> SdpResult<Sdp> {
+    let sdp_content = reqwest::get(url.as_str()).await?.text().await?;
+    log::debug!("SDP: \n{sdp_content}");
+    sdp_from_str(&sdp_content)
+}
 
-pub async fn sdp_from_url(url: &str) -> SdpResult<Sdp> {
-    let sdp_content = reqwest::get(url).await?.text().await?;
+pub async fn sdp_from_file(path: impl AsRef<Path>) -> SdpResult<Sdp> {
+    let sdp_content = fs::read_to_string(path).await?;
     log::debug!("SDP: \n{sdp_content}");
     sdp_from_str(&sdp_content)
 }
@@ -373,14 +397,16 @@ impl FromStr for Sdp {
 pub enum SdpError {
     #[error("sdp format error")]
     FormatError,
-    #[error("parse int error")]
+    #[error("parse int error: {0}")]
     ParseVersionError(#[from] ParseIntError),
-    #[error("parse float error")]
+    #[error("parse float error: {0}")]
     ParseFloatError(#[from] ParseFloatError),
-    #[error("addr parse error")]
+    #[error("addr parse error: {0}")]
     AddrParseError(#[from] AddrParseError),
-    #[error("reqwest error")]
+    #[error("reqwest error: {0}")]
     ReqwestError(#[from] reqwest::Error),
+    #[error("io error: {0}")]
+    IoError(#[from] io::Error),
 }
 
 pub type SdpResult<T> = Result<T, SdpError>;
