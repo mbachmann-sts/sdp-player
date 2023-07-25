@@ -1,16 +1,17 @@
 use anyhow::{anyhow, Ok};
 use clap::Parser;
 use sdp_player::{
-    audio::{play, Stream},
-    preset::{load_presets, save_preset, CustomStreamSettings, Preset},
-    sdp::{sdp_from_file, sdp_from_url, BitDepth},
-    stream::{subscribe, subscribe_sdp},
+    audio::play,
+    preset::{load_presets, save_preset, Preset},
+    sdp::{session_descriptor_from_sdp_file, session_descriptor_from_sdp_url},
+    stream::Stream,
+    BitDepth, SessionDescriptor,
 };
 use std::{
     net::{Ipv4Addr, SocketAddrV4},
     path::{Path, PathBuf},
 };
-use tokio::{spawn, sync::mpsc};
+use tokio::sync::broadcast;
 use url::Url;
 
 #[derive(Parser, Debug)]
@@ -72,10 +73,12 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    let (tx_stop, _rx_stop) = broadcast::channel(1);
+
     if let Some(preset) = args.preset {
-        play_preset(preset).await?;
+        play_preset(preset, tx_stop).await?;
     } else if let Some(sdp_url) = args.url {
-        play_sdp_url(&sdp_url).await?;
+        play_sdp_url(&sdp_url, tx_stop).await?;
     } else if let Some(sdp_file) = args.file {
         let sdp_file = sdp_file.canonicalize()?;
         if let Some(name) = args.save {
@@ -88,7 +91,7 @@ async fn main() -> anyhow::Result<()> {
                 log::error!("Could not save preset: {e}");
             }
         }
-        play_sdp_file(&sdp_file).await?;
+        play_sdp_file(&sdp_file, tx_stop).await?;
     } else if let Some(multicast_address) = args.multicast_address {
         let channels = args.channels;
         let bit_depth = args.bit_depth;
@@ -97,7 +100,7 @@ async fn main() -> anyhow::Result<()> {
         if let Some(name) = args.save {
             let preset = Preset {
                 name,
-                custom_stream: Some(CustomStreamSettings {
+                custom_stream: Some(SessionDescriptor {
                     bit_depth: bit_depth.clone(),
                     channels,
                     multicast_address,
@@ -110,12 +113,15 @@ async fn main() -> anyhow::Result<()> {
                 log::error!("Could not save preset: {e}");
             }
         }
-        play_stream(
-            multicast_address,
-            channels,
-            bit_depth,
-            sample_rate,
-            packet_time,
+        play_descriptor(
+            SessionDescriptor {
+                multicast_address,
+                bit_depth,
+                channels,
+                sample_rate,
+                packet_time,
+            },
+            tx_stop,
         )
         .await?;
     }
@@ -123,30 +129,16 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn play_preset(preset: String) -> anyhow::Result<()> {
+async fn play_preset(preset: String, stop: broadcast::Sender<()>) -> anyhow::Result<()> {
     log::info!("Playing stream from preset '{preset}'");
     let presets = load_presets().await?;
     if let Some(preset) = presets.get(&preset) {
         if let Some(sdp_url) = &preset.sdp_url {
-            play_sdp_url(sdp_url).await?;
+            play_sdp_url(sdp_url, stop).await?;
         } else if let Some(sdp_file) = &preset.local_sdp_file {
-            play_sdp_file(&sdp_file).await?;
-        } else if let Some(CustomStreamSettings {
-            multicast_address,
-            bit_depth,
-            channels,
-            sample_rate,
-            packet_time,
-        }) = &preset.custom_stream
-        {
-            play_stream(
-                *multicast_address,
-                *channels,
-                bit_depth.clone(),
-                *sample_rate,
-                *packet_time,
-            )
-            .await?;
+            play_sdp_file(&sdp_file, stop).await?;
+        } else if let Some(sd) = preset.custom_stream.clone() {
+            play_descriptor(sd, stop).await?;
         }
         Ok(())
     } else {
@@ -154,58 +146,42 @@ async fn play_preset(preset: String) -> anyhow::Result<()> {
     }
 }
 
-async fn play_sdp_url(url: &Url) -> anyhow::Result<()> {
+async fn play_sdp_url(url: &Url, stop: broadcast::Sender<()>) -> anyhow::Result<()> {
     log::info!("Playing stream from SDP url '{url}'");
 
-    let local_ip = Ipv4Addr::UNSPECIFIED;
-    let sdp = sdp_from_url(url).await?;
-    let (tx, rx) = mpsc::unbounded_channel();
-    spawn(subscribe_sdp(sdp.clone(), tx, local_ip));
-    play(Stream::from_sdp(rx, sdp)).await?;
-
-    Ok(())
+    let sd = session_descriptor_from_sdp_url(url).await?;
+    do_play_descriptor(sd, stop).await
 }
 
-async fn play_sdp_file(sdp_file: &Path) -> anyhow::Result<()> {
+async fn play_sdp_file(sdp_file: &Path, stop: broadcast::Sender<()>) -> anyhow::Result<()> {
     log::info!(
         "Playing stream from SDP file '{}'",
         sdp_file.as_os_str().to_string_lossy()
     );
 
-    let local_ip = Ipv4Addr::UNSPECIFIED;
-    let sdp = sdp_from_file(sdp_file).await?;
-    let (tx, rx) = mpsc::unbounded_channel();
-    spawn(subscribe_sdp(sdp.clone(), tx, local_ip));
-    play(Stream::from_sdp(rx, sdp)).await?;
-
-    Ok(())
+    let sd = session_descriptor_from_sdp_file(sdp_file).await?;
+    do_play_descriptor(sd, stop).await
 }
 
-async fn play_stream(
-    multicast_address: SocketAddrV4,
-    channels: u16,
-    bit_depth: BitDepth,
-    sample_rate: u32,
-    packet_time: f32,
-) -> anyhow::Result<()> {
-    log::info!("Playing custom stream '{multicast_address} {bit_depth}/{sample_rate}/{channels}'");
+async fn play_descriptor(sd: SessionDescriptor, stop: broadcast::Sender<()>) -> anyhow::Result<()> {
+    log::info!(
+        "Playing custom stream '{} {}/{}/{}'",
+        sd.multicast_address,
+        sd.bit_depth,
+        sd.sample_rate,
+        sd.channels
+    );
 
-    let local_ip = Ipv4Addr::UNSPECIFIED;
-    let (tx, rx) = mpsc::unbounded_channel();
-    spawn(subscribe(
-        *multicast_address.ip(),
-        multicast_address.port(),
-        tx,
-        local_ip,
-    ));
-    play(Stream::new(
-        rx,
-        channels,
-        sample_rate,
-        bit_depth,
-        packet_time,
-    ))
-    .await?;
+    do_play_descriptor(sd, stop).await
+}
+
+async fn do_play_descriptor(
+    sd: SessionDescriptor,
+    stop: broadcast::Sender<()>,
+) -> anyhow::Result<()> {
+    let local_address = Ipv4Addr::UNSPECIFIED;
+    let stream = Stream::new(sd, local_address).await?;
+    play(stream, stop).await?;
 
     Ok(())
 }

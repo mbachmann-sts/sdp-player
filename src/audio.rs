@@ -1,71 +1,21 @@
-use std::fmt::Debug;
-use std::{env, thread};
-
-use crate::sdp::{BitDepth, Sdp};
+use crate::stream::Stream;
+use crate::BitDepth;
 use anyhow::anyhow;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{traits::HostTrait, FromSample, SizedSample};
 use cpal::{SampleRate, StreamConfig};
-use tokio::sync::mpsc;
+use std::fmt::Debug;
+use std::{env, thread};
+use tokio::sync::broadcast;
 use tokio::time::Instant;
 
-pub struct Stream {
-    rx: mpsc::UnboundedReceiver<Vec<u8>>,
-    channels: u16,
-    sample_rate: u32,
-    bit_depth: BitDepth,
-    packet_time: f32,
-}
+pub async fn play(mut stream: Stream, stop: broadcast::Sender<()>) -> anyhow::Result<()> {
+    // TODO receive stop signal
 
-impl Stream {
-    pub fn new(
-        rx: mpsc::UnboundedReceiver<Vec<u8>>,
-        channels: u16,
-        sample_rate: u32,
-        bit_depth: BitDepth,
-        packet_time: f32,
-    ) -> Self {
-        Self {
-            bit_depth,
-            channels,
-            rx,
-            sample_rate,
-            packet_time,
-        }
-    }
-
-    pub fn from_sdp(
-        rx: mpsc::UnboundedReceiver<Vec<u8>>,
-        Sdp {
-            version: _,
-            multicast_port: _,
-            multicast_address: _,
-            payload_id: _,
-            packet_time,
-            bit_depth,
-            sample_rate,
-            channels,
-        }: Sdp,
-    ) -> Self {
-        Self {
-            bit_depth,
-            channels,
-            rx,
-            sample_rate,
-            packet_time,
-        }
-    }
-
-    fn buffer_size(&self) -> u32 {
-        let packet_time = self.packet_time;
-        let sample_rate = self.sample_rate;
-        let channels = self.channels;
-        ((channels as f64 * packet_time as f64 * sample_rate as f64) / 1_000.0) as u32
-    }
-}
-
-pub async fn play(mut stream: Stream) -> anyhow::Result<()> {
     let host = cpal::default_host();
+    let descriptor = stream.descriptor.clone();
+
+    let mut stream_rx = stream.play(stop.clone()).await?;
 
     if let Some(device) = host.default_output_device() {
         log::info!("Output device: {}", device.name()?);
@@ -78,9 +28,9 @@ pub async fn play(mut stream: Stream) -> anyhow::Result<()> {
             .parse()?;
 
         let config = StreamConfig {
-            buffer_size: cpal::BufferSize::Fixed(stream.buffer_size() * buffer_multiplier),
-            channels: stream.channels,
-            sample_rate: SampleRate(stream.sample_rate),
+            buffer_size: cpal::BufferSize::Fixed(descriptor.buffer_size() * buffer_multiplier),
+            channels: descriptor.channels,
+            sample_rate: SampleRate(descriptor.sample_rate),
         };
 
         log::info!("Output config: {:?}", config);
@@ -88,7 +38,7 @@ pub async fn play(mut stream: Stream) -> anyhow::Result<()> {
         let (tx, rx) = std::sync::mpsc::channel();
         let (meter_tx, meter_rx) = std::sync::mpsc::channel();
 
-        let converter = match stream.bit_depth {
+        let converter = match descriptor.bit_depth {
             BitDepth::L16 => l16_samples,
             BitDepth::L24 => l24_samples,
             BitDepth::L32 => l32_samples,
@@ -135,7 +85,7 @@ pub async fn play(mut stream: Stream) -> anyhow::Result<()> {
             }
         });
 
-        while let Some(packet) = stream.rx.recv().await {
+        while let Some(packet) = stream_rx.recv().await {
             tx.send(packet)?;
         }
 

@@ -1,10 +1,11 @@
+use crate::{
+    error::{SdpPlayerError, SdpPlayerResult},
+    SessionDescriptor,
+};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, io, net::SocketAddrV4, path::PathBuf};
-use thiserror::Error;
+use std::{collections::HashMap, path::PathBuf};
 use tokio::fs;
 use url::Url;
-
-use crate::sdp::BitDepth;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -17,19 +18,10 @@ pub struct Preset {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub sdp_url: Option<Url>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub custom_stream: Option<CustomStreamSettings>,
+    pub custom_stream: Option<SessionDescriptor>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CustomStreamSettings {
-    pub multicast_address: SocketAddrV4,
-    pub bit_depth: BitDepth,
-    pub channels: u16,
-    pub sample_rate: u32,
-    pub packet_time: f32,
-}
-
-pub async fn load_presets() -> PresetResult<HashMap<String, Preset>> {
+pub async fn load_presets() -> SdpPlayerResult<HashMap<String, Preset>> {
     if let Some(base_dirs) = directories::BaseDirs::new() {
         let mut configs = HashMap::new();
         let config_dir = base_dirs.config_dir();
@@ -45,11 +37,11 @@ pub async fn load_presets() -> PresetResult<HashMap<String, Preset>> {
         }
         Ok(configs)
     } else {
-        Err(PresetError::NoConfigDir)
+        Err(SdpPlayerError::NoConfigDir)
     }
 }
 
-pub async fn save_preset(preset: Preset) -> PresetResult<()> {
+pub async fn save_preset(preset: Preset) -> SdpPlayerResult<()> {
     if let Some(base_dirs) = directories::BaseDirs::new() {
         let config_dir = base_dirs.config_dir();
         let app_config_dir = config_dir.join(env!("CARGO_PKG_NAME"));
@@ -63,21 +55,9 @@ pub async fn save_preset(preset: Preset) -> PresetResult<()> {
         log::info!("Successfully saved preset '{}'", preset.name);
         Ok(())
     } else {
-        Err(PresetError::NoConfigDir)
+        Err(SdpPlayerError::NoConfigDir)
     }
 }
-
-#[derive(Error, Debug)]
-pub enum PresetError {
-    #[error("no config dir found")]
-    NoConfigDir,
-    #[error("io error: {0}")]
-    IoError(#[from] io::Error),
-    #[error("yaml error: {0}")]
-    YamlError(#[from] serde_yaml::Error),
-}
-
-pub type PresetResult<T> = Result<T, PresetError>;
 
 #[cfg(test)]
 mod test {
