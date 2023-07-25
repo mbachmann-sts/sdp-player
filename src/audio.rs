@@ -7,6 +7,7 @@ use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{traits::HostTrait, FromSample, SizedSample};
 use cpal::{SampleRate, StreamConfig};
 use tokio::sync::mpsc;
+use tokio::time::Instant;
 
 pub struct Stream {
     rx: mpsc::UnboundedReceiver<Vec<u8>>,
@@ -85,6 +86,7 @@ pub async fn play(mut stream: Stream) -> anyhow::Result<()> {
         log::info!("Output config: {:?}", config);
 
         let (tx, rx) = std::sync::mpsc::channel();
+        let (meter_tx, meter_rx) = std::sync::mpsc::channel();
 
         let converter = match stream.bit_depth {
             BitDepth::L16 => l16_samples,
@@ -95,21 +97,40 @@ pub async fn play(mut stream: Stream) -> anyhow::Result<()> {
 
         thread::spawn(move || {
             match default_config.sample_format() {
-                cpal::SampleFormat::I8 => run::<i8>(&device, &config, rx, converter),
-                cpal::SampleFormat::I16 => run::<i16>(&device, &config, rx, converter),
+                cpal::SampleFormat::I8 => run::<i8>(&device, &config, rx, converter, meter_tx),
+                cpal::SampleFormat::I16 => run::<i16>(&device, &config, rx, converter, meter_tx),
                 // cpal::SampleFormat::I24 => run::<I24>(&device, &config),
-                cpal::SampleFormat::I32 => run::<i32>(&device, &config, rx, converter),
+                cpal::SampleFormat::I32 => run::<i32>(&device, &config, rx, converter, meter_tx),
                 // cpal::SampleFormat::I48 => run::<I48>(&device, &config),
-                cpal::SampleFormat::I64 => run::<i64>(&device, &config, rx, converter),
-                cpal::SampleFormat::U8 => run::<u8>(&device, &config, rx, converter),
-                cpal::SampleFormat::U16 => run::<u16>(&device, &config, rx, converter),
+                cpal::SampleFormat::I64 => run::<i64>(&device, &config, rx, converter, meter_tx),
+                cpal::SampleFormat::U8 => run::<u8>(&device, &config, rx, converter, meter_tx),
+                cpal::SampleFormat::U16 => run::<u16>(&device, &config, rx, converter, meter_tx),
                 // cpal::SampleFormat::U24 => run::<U24>(&device, &config),
-                cpal::SampleFormat::U32 => run::<u32>(&device, &config, rx, converter),
+                cpal::SampleFormat::U32 => run::<u32>(&device, &config, rx, converter, meter_tx),
                 // cpal::SampleFormat::U48 => run::<U48>(&device, &config),
-                cpal::SampleFormat::U64 => run::<u64>(&device, &config, rx, converter),
-                cpal::SampleFormat::F32 => run::<f32>(&device, &config, rx, converter),
-                cpal::SampleFormat::F64 => run::<f64>(&device, &config, rx, converter),
+                cpal::SampleFormat::U64 => run::<u64>(&device, &config, rx, converter, meter_tx),
+                cpal::SampleFormat::F32 => run::<f32>(&device, &config, rx, converter, meter_tx),
+                cpal::SampleFormat::F64 => run::<f64>(&device, &config, rx, converter, meter_tx),
                 sample_format => panic!("Unsupported sample format '{sample_format}'"),
+            }
+        });
+
+        thread::spawn(move || {
+            let mut start = Instant::now();
+            let mut level = 0.0;
+
+            while let Ok(samples) = meter_rx.recv() {
+                for s in samples {
+                    let l = s.abs();
+                    if l > level {
+                        level = l;
+                    }
+                }
+                if start.elapsed().as_secs_f32() >= 1.0 {
+                    log::debug!("Audio level: {level:.2}");
+                    start = Instant::now();
+                    level = 0.0;
+                }
             }
         });
 
@@ -128,6 +149,7 @@ pub fn run<T>(
     config: &cpal::StreamConfig,
     rx: std::sync::mpsc::Receiver<Vec<u8>>,
     converter: fn(&[u8]) -> Vec<f32>,
+    meter_tx: std::sync::mpsc::Sender<Vec<f32>>,
 ) -> Result<(), anyhow::Error>
 where
     T: SizedSample + FromSample<f32> + Send + Debug + 'static,
@@ -143,6 +165,10 @@ where
             let new_data = rx.recv().expect("no more audio data");
             let new_samples = converter(&new_data);
             ready_samples.extend(new_samples);
+        }
+
+        if let Err(e) = meter_tx.send(ready_samples.clone()) {
+            log::error!("Error forwarding meter values: {e}");
         }
 
         let mut output = buf.iter_mut();
@@ -170,7 +196,7 @@ fn l16_samples(bytes: &[u8]) -> Vec<f32> {
             sample[i] = *b;
         }
         let val = i16::from_be_bytes(sample);
-        let float = val as f64 / i16::MAX as f64;
+        let float = (val as f64) / (i16::MAX as f64);
         out.push(float as f32);
     }
 
