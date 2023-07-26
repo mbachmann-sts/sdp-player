@@ -25,11 +25,11 @@ impl Stream {
         local_address: Ipv4Addr,
     ) -> SdpPlayerResult<Self> {
         let socket = {
-            let socket_addr = format!("{}:{}", local_address, descriptor.multicast_address.port());
+            let socket_addr = format!("{}:{}", local_address, descriptor.multicast_port);
             log::info!("Binding to local address {socket_addr}");
             let socket = UdpSocket::bind(socket_addr).await?;
             log::info!("Joining multicast group {}", descriptor.multicast_address);
-            socket.join_multicast_v4(*descriptor.multicast_address.ip(), local_address)?;
+            socket.join_multicast_v4(descriptor.multicast_address, local_address)?;
             socket
         };
 

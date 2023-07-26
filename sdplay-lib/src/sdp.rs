@@ -3,12 +3,12 @@ use crate::{
     BitDepth, SessionDescriptor,
 };
 use regex::Regex;
-use std::{
-    net::{Ipv4Addr, SocketAddrV4},
-    path::Path,
-    str::FromStr,
-};
+#[cfg(feature = "fs")]
+use std::path::Path;
+use std::{net::Ipv4Addr, str::FromStr};
+#[cfg(feature = "fs")]
 use tokio::fs;
+#[cfg(feature = "net")]
 use url::Url;
 
 const RTPMAP_REGEX: &str = r"rtpmap:([0-9]+) (.+)\/([0-9]+)\/([0-9]+)";
@@ -187,12 +187,14 @@ pub enum SdpValue {
     Attribute(String),                               // a
 }
 
+#[cfg(feature = "net")]
 pub async fn session_descriptor_from_sdp_url(url: &Url) -> SdpPlayerResult<SessionDescriptor> {
     let sdp_content = reqwest::get(url.as_str()).await?.text().await?;
     log::debug!("SDP: \n{sdp_content}");
     sdp_content.parse()
 }
 
+#[cfg(feature = "fs")]
 pub async fn session_descriptor_from_sdp_file(
     path: impl AsRef<Path>,
 ) -> SdpPlayerResult<SessionDescriptor> {
@@ -296,7 +298,8 @@ impl FromStr for SessionDescriptor {
             Ok(SessionDescriptor {
                 bit_depth,
                 channels,
-                multicast_address: SocketAddrV4::new(multicast_address, multicast_port),
+                multicast_address,
+                multicast_port,
                 packet_time,
                 sample_rate,
             })

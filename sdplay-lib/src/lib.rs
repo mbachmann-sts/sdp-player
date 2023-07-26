@@ -1,16 +1,17 @@
 pub mod audio;
 pub mod error;
-pub mod preset;
 pub mod sdp;
 pub mod stream;
 
 use error::SdpPlayerError;
+use poem_openapi::{Enum, Object};
 use serde::{Deserialize, Serialize};
-use std::{fmt, net::SocketAddrV4, str::FromStr};
+use std::{fmt, net::Ipv4Addr, str::FromStr};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 pub struct SessionDescriptor {
-    pub multicast_address: SocketAddrV4,
+    pub multicast_address: Ipv4Addr,
+    pub multicast_port: u16,
     pub bit_depth: BitDepth,
     pub channels: u16,
     pub sample_rate: u32,
@@ -26,7 +27,7 @@ impl SessionDescriptor {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Enum)]
 pub enum BitDepth {
     L16,
     L24,

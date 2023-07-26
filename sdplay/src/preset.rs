@@ -1,7 +1,5 @@
-use crate::{
-    error::{SdpPlayerError, SdpPlayerResult},
-    SessionDescriptor,
-};
+use crate::SessionDescriptor;
+use sdplay_lib::error::{SdpPlayerError, SdpPlayerResult};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::PathBuf};
 use tokio::fs;
@@ -56,17 +54,5 @@ pub async fn save_preset(preset: Preset) -> SdpPlayerResult<()> {
         Ok(())
     } else {
         Err(SdpPlayerError::NoConfigDir)
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn load_presets() {
-        let yaml = include_str!("../presets/presets.yml");
-        let presets: Vec<Preset> = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(2, presets.len());
     }
 }

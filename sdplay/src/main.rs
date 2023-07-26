@@ -1,8 +1,10 @@
+mod preset;
+
+use crate::preset::{load_presets, save_preset, Preset};
 use anyhow::{anyhow, Ok};
 use clap::Parser;
-use sdp_player::{
+use sdplay_lib::{
     audio::play,
-    preset::{load_presets, save_preset, Preset},
     sdp::{session_descriptor_from_sdp_file, session_descriptor_from_sdp_url},
     stream::Stream,
     BitDepth, SessionDescriptor,
@@ -103,7 +105,8 @@ async fn main() -> anyhow::Result<()> {
                 custom_stream: Some(SessionDescriptor {
                     bit_depth: bit_depth.clone(),
                     channels,
-                    multicast_address,
+                    multicast_address: *multicast_address.ip(),
+                    multicast_port: multicast_address.port(),
                     sample_rate,
                     packet_time,
                 }),
@@ -115,7 +118,8 @@ async fn main() -> anyhow::Result<()> {
         }
         play_descriptor(
             SessionDescriptor {
-                multicast_address,
+                multicast_address: *multicast_address.ip(),
+                multicast_port: multicast_address.port(),
                 bit_depth,
                 channels,
                 sample_rate,

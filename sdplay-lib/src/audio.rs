@@ -1,6 +1,6 @@
+use crate::error::{SdpPlayerError, SdpPlayerResult};
 use crate::stream::Stream;
 use crate::BitDepth;
-use anyhow::anyhow;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{traits::HostTrait, FromSample, SizedSample};
 use cpal::{SampleRate, StreamConfig};
@@ -9,7 +9,7 @@ use std::{env, thread};
 use tokio::sync::broadcast;
 use tokio::time::Instant;
 
-pub async fn play(mut stream: Stream, stop: broadcast::Sender<()>) -> anyhow::Result<()> {
+pub async fn play(mut stream: Stream, stop: broadcast::Sender<()>) -> SdpPlayerResult<()> {
     // TODO receive stop signal
 
     let host = cpal::default_host();
@@ -25,7 +25,8 @@ pub async fn play(mut stream: Stream, stop: broadcast::Sender<()>) -> anyhow::Re
 
         let buffer_multiplier: u32 = env::var("BUFFER_MULTIPLIER")
             .unwrap_or("100".to_owned())
-            .parse()?;
+            .parse()
+            .map_err(SdpPlayerError::invalid_buffer_multiplier)?;
 
         let config = StreamConfig {
             buffer_size: cpal::BufferSize::Fixed(descriptor.buffer_size() * buffer_multiplier),
@@ -91,7 +92,7 @@ pub async fn play(mut stream: Stream, stop: broadcast::Sender<()>) -> anyhow::Re
 
         Ok(())
     } else {
-        Err(anyhow!("No default output device."))
+        Err(SdpPlayerError::NoDefaultDevice)
     }
 }
 
@@ -101,7 +102,7 @@ pub fn run<T>(
     rx: std::sync::mpsc::Receiver<Vec<u8>>,
     converter: fn(&[u8]) -> Vec<f32>,
     meter_tx: std::sync::mpsc::Sender<Vec<f32>>,
-) -> Result<(), anyhow::Error>
+) -> SdpPlayerResult<()>
 where
     T: SizedSample + FromSample<f32> + Send + Debug + 'static,
 {
