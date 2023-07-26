@@ -7,7 +7,7 @@ use std::{
 use cpal::{BuildStreamError, DeviceNameError, PlayStreamError};
 use rtp_rs::RtpReaderError;
 use thiserror::Error;
-use tokio::sync::mpsc::error::SendError;
+use tokio::sync::{broadcast, mpsc::error::SendError};
 
 #[derive(Error, Debug)]
 pub enum SdpPlayerError {
@@ -54,6 +54,8 @@ pub enum SdpPlayerError {
     SendError(#[from] SendError<Vec<u8>>),
     #[error("send error: {0}")]
     StdSendError(#[from] std::sync::mpsc::SendError<Vec<u8>>),
+    #[error("send error: {0}")]
+    BroadcastSendError(#[from] broadcast::error::SendError<()>),
     #[error("rtp reader error")]
     RtpReaderError(RtpReaderError),
     #[error("IPv6 not supported")]

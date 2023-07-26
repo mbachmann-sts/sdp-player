@@ -1,5 +1,5 @@
 use http::StatusCode;
-use poem::{listener::TcpListener, Result, Route};
+use poem::{listener::TcpListener, web::Data, EndpointExt, Result, Route};
 use poem_openapi::{
     payload::{Json, PlainText},
     Object, OpenApi, OpenApiService,
@@ -19,17 +19,18 @@ pub struct Status {
 #[OpenApi]
 impl Api {
     #[oai(path = "/play/descriptor", method = "post")]
-    async fn play_sd(&self, Json(sd): Json<SessionDescriptor>) -> Result<Json<&'static str>> {
+    async fn play_sd(
+        &self,
+        Data(stop): Data<&broadcast::Sender<()>>,
+        Json(sd): Json<SessionDescriptor>,
+    ) -> Result<Json<&'static str>> {
         log::info!("Playing SessionDescriptor from URL: {sd:?}");
-
-        // TODO pass this around as state
-        let (tx_stop, _rx_stop) = broadcast::channel(1);
 
         let local_address = Ipv4Addr::UNSPECIFIED;
         let stream = Stream::new(sd, local_address)
             .await
             .map_err(to_error_response)?;
-        spawn(play(stream, tx_stop));
+        spawn(play(stream, stop.clone()));
 
         Ok(Json("Ok"))
     }
@@ -56,9 +57,9 @@ impl Api {
     }
 
     #[oai(path = "/stop", method = "post")]
-    async fn stop(&self) -> Result<Json<&'static str>> {
+    async fn stop(&self, Data(stop): Data<&broadcast::Sender<()>>) -> Result<Json<&'static str>> {
         log::info!("Stopping receiver");
-        // TODO
+        stop.send(()).map_err(|e| to_error_response(e.into()))?;
         Ok(Json("Ok"))
     }
 
@@ -98,6 +99,9 @@ pub async fn start() -> anyhow::Result<()> {
 
     log::info!("Starting openapi service at {}", public_url);
 
+    // TODO pass this around as state
+    let (tx_stop, _rx_stop) = broadcast::channel::<()>(1);
+
     let openapi_explorer = api_service.swagger_ui();
     let oapi_spec_json = api_service.spec_endpoint();
     let oapi_spec_yaml = api_service.spec_endpoint_yaml();
@@ -106,9 +110,12 @@ pub async fn start() -> anyhow::Result<()> {
         .nest("/openapi", api_service)
         .nest("/doc", openapi_explorer)
         .nest("/openapi/json", oapi_spec_json)
-        .nest("/openapi/yaml", oapi_spec_yaml);
+        .nest("/openapi/yaml", oapi_spec_yaml)
+        .data(tx_stop);
 
     poem::Server::new(TcpListener::bind(addr)).run(app).await?;
+
+    log::info!("Server stopped.");
 
     Ok(())
 }

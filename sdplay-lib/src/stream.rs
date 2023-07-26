@@ -6,7 +6,7 @@ use rtp_rs::RtpReader;
 use std::net::Ipv4Addr;
 use tokio::{
     net::UdpSocket,
-    spawn,
+    select, spawn,
     sync::{
         broadcast,
         mpsc::{self},
@@ -41,7 +41,7 @@ impl Stream {
 
     pub async fn play(
         &mut self,
-        _stop: broadcast::Sender<()>,
+        stop: broadcast::Sender<()>,
     ) -> SdpPlayerResult<mpsc::UnboundedReceiver<Vec<u8>>> {
         let mut buf = [0; 102400];
 
@@ -55,34 +55,39 @@ impl Stream {
             .take()
             .ok_or(SdpPlayerError::ReceiverAlreadystarted)?;
 
-        // TODO receive stop signal
+        let mut stop = stop.subscribe();
 
         spawn(async move {
             loop {
-                match receive_rtp_payload(&socket, &mut buf).await {
-                    Ok(Some(payload)) => {
-                        if start.elapsed().as_secs_f32() >= 1.0 {
-                            log::debug!(
-                                "Receiving {} packets/s; payload size: {}",
-                                counter,
-                                payload.len()
-                            );
-                            counter = 0;
-                            start = Instant::now();
-                        } else {
-                            counter += 1;
+                select! {
+                    _ = stop.recv() => { break; },
+                    recv = receive_rtp_payload(&socket, &mut buf) => {
+                        match recv {
+                            Ok(Some(payload)) => {
+                                if start.elapsed().as_secs_f32() >= 1.0 {
+                                    log::debug!(
+                                        "Receiving {} packets/s; payload size: {}",
+                                        counter,
+                                        payload.len()
+                                    );
+                                    counter = 0;
+                                    start = Instant::now();
+                                } else {
+                                    counter += 1;
+                                }
+                                if let Err(e) = tx.send(payload) {
+                                    log::error!("Error forwarding received data: {e}");
+                                    log::warn!("Stopping receiver.");
+                                    break;
+                                }
+                            }
+                            Ok(None) => (),
+                            Err(e) => {
+                                log::error!("Error receiving data: {e}");
+                                log::warn!("Stopping receiver.");
+                                break;
+                            }
                         }
-                        if let Err(e) = tx.send(payload) {
-                            log::error!("Error forwarding received data: {e}");
-                            log::warn!("Stopping receiver.");
-                            break;
-                        }
-                    }
-                    Ok(None) => (),
-                    Err(e) => {
-                        log::error!("Error receiving data: {e}");
-                        log::warn!("Stopping receiver.");
-                        break;
                     }
                 }
             }

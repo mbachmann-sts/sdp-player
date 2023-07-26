@@ -1,0 +1,8 @@
+### stop
+POST http://localhost:8080/openapi/stop HTTP/1.1
+
+### play
+POST http://localhost:8080/openapi/play/descriptor HTTP/1.1
+content-type: application/json
+
+{"multicast_address":"239.69.32.100","multicast_port":5004,"bit_depth":"L24","channels":2,"sample_rate":48000,"packet_time":1}

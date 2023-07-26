@@ -8,10 +8,9 @@ use std::fmt::Debug;
 use std::{env, thread};
 use tokio::sync::broadcast;
 use tokio::time::Instant;
+use tokio::{select, spawn};
 
 pub async fn play(mut stream: Stream, stop: broadcast::Sender<()>) -> SdpPlayerResult<()> {
-    // TODO receive stop signal
-
     let host = cpal::default_host();
     let descriptor = stream.descriptor.clone();
 
@@ -46,22 +45,48 @@ pub async fn play(mut stream: Stream, stop: broadcast::Sender<()>) -> SdpPlayerR
             BitDepth::FloatingPoint => f32_samples,
         };
 
+        let (tx_stop, rx_stop) = std::sync::mpsc::channel();
+        let mut stop_run = stop.subscribe();
+        spawn(async move {
+            stop_run.recv().await.ok();
+            tx_stop.send(()).ok();
+        });
         thread::spawn(move || {
             match default_config.sample_format() {
-                cpal::SampleFormat::I8 => run::<i8>(&device, &config, rx, converter, meter_tx),
-                cpal::SampleFormat::I16 => run::<i16>(&device, &config, rx, converter, meter_tx),
+                cpal::SampleFormat::I8 => {
+                    run::<i8>(&device, &config, rx, converter, meter_tx, rx_stop)
+                }
+                cpal::SampleFormat::I16 => {
+                    run::<i16>(&device, &config, rx, converter, meter_tx, rx_stop)
+                }
                 // cpal::SampleFormat::I24 => run::<I24>(&device, &config),
-                cpal::SampleFormat::I32 => run::<i32>(&device, &config, rx, converter, meter_tx),
+                cpal::SampleFormat::I32 => {
+                    run::<i32>(&device, &config, rx, converter, meter_tx, rx_stop)
+                }
                 // cpal::SampleFormat::I48 => run::<I48>(&device, &config),
-                cpal::SampleFormat::I64 => run::<i64>(&device, &config, rx, converter, meter_tx),
-                cpal::SampleFormat::U8 => run::<u8>(&device, &config, rx, converter, meter_tx),
-                cpal::SampleFormat::U16 => run::<u16>(&device, &config, rx, converter, meter_tx),
+                cpal::SampleFormat::I64 => {
+                    run::<i64>(&device, &config, rx, converter, meter_tx, rx_stop)
+                }
+                cpal::SampleFormat::U8 => {
+                    run::<u8>(&device, &config, rx, converter, meter_tx, rx_stop)
+                }
+                cpal::SampleFormat::U16 => {
+                    run::<u16>(&device, &config, rx, converter, meter_tx, rx_stop)
+                }
                 // cpal::SampleFormat::U24 => run::<U24>(&device, &config),
-                cpal::SampleFormat::U32 => run::<u32>(&device, &config, rx, converter, meter_tx),
+                cpal::SampleFormat::U32 => {
+                    run::<u32>(&device, &config, rx, converter, meter_tx, rx_stop)
+                }
                 // cpal::SampleFormat::U48 => run::<U48>(&device, &config),
-                cpal::SampleFormat::U64 => run::<u64>(&device, &config, rx, converter, meter_tx),
-                cpal::SampleFormat::F32 => run::<f32>(&device, &config, rx, converter, meter_tx),
-                cpal::SampleFormat::F64 => run::<f64>(&device, &config, rx, converter, meter_tx),
+                cpal::SampleFormat::U64 => {
+                    run::<u64>(&device, &config, rx, converter, meter_tx, rx_stop)
+                }
+                cpal::SampleFormat::F32 => {
+                    run::<f32>(&device, &config, rx, converter, meter_tx, rx_stop)
+                }
+                cpal::SampleFormat::F64 => {
+                    run::<f64>(&device, &config, rx, converter, meter_tx, rx_stop)
+                }
                 sample_format => panic!("Unsupported sample format '{sample_format}'"),
             }
         });
@@ -86,9 +111,22 @@ pub async fn play(mut stream: Stream, stop: broadcast::Sender<()>) -> SdpPlayerR
             }
         });
 
-        while let Some(packet) = stream_rx.recv().await {
-            tx.send(packet)?;
+        let mut stop = stop.subscribe();
+
+        loop {
+            select! {
+                recv = stream_rx.recv() => {
+                    if let Some(packet) = recv {
+                        tx.send(packet)?;
+                    } else {
+                        break;
+                    }
+                }
+                _ = stop.recv() => { break; }
+            }
         }
+
+        log::info!("Playback stopped.");
 
         Ok(())
     } else {
@@ -102,6 +140,7 @@ pub fn run<T>(
     rx: std::sync::mpsc::Receiver<Vec<u8>>,
     converter: fn(&[u8]) -> Vec<f32>,
     meter_tx: std::sync::mpsc::Sender<Vec<f32>>,
+    stop: std::sync::mpsc::Receiver<()>,
 ) -> SdpPlayerResult<()>
 where
     T: SizedSample + FromSample<f32> + Send + Debug + 'static,
@@ -134,9 +173,9 @@ where
     let stream = device.build_output_stream(config, data_callback, err_fn, None)?;
     stream.play()?;
 
-    loop {
-        std::thread::sleep(std::time::Duration::from_secs(1));
-    }
+    stop.recv().ok();
+
+    Ok(())
 }
 
 fn l16_samples(bytes: &[u8]) -> Vec<f32> {
