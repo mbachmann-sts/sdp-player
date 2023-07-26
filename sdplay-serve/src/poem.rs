@@ -1,12 +1,17 @@
-use http::StatusCode;
 use poem::{listener::TcpListener, web::Data, EndpointExt, Result, Route};
 use poem_openapi::{
     payload::{Json, PlainText},
     Object, OpenApi, OpenApiService,
 };
-use sdplay_lib::{audio::play, error::SdpPlayerError, stream::Stream, SessionDescriptor};
-use std::net::Ipv4Addr;
-use tokio::{spawn, sync::broadcast};
+use sdplay_lib::{
+    audio::play,
+    error::ToSdpPlayerResult,
+    sdp::{session_descriptor_from_sdp_str, session_descriptor_from_sdp_url},
+    stream::Stream,
+    SessionDescriptor,
+};
+use std::{net::Ipv4Addr, time::Duration};
+use tokio::{spawn, sync::broadcast, time::sleep};
 use url::Url;
 
 struct Api;
@@ -24,28 +29,53 @@ impl Api {
         Data(stop): Data<&broadcast::Sender<()>>,
         Json(sd): Json<SessionDescriptor>,
     ) -> Result<Json<&'static str>> {
+        stop.send(()).convert()?;
+        sleep(Duration::from_millis(100)).await;
+
         log::info!("Playing SessionDescriptor from URL: {sd:?}");
 
         let local_address = Ipv4Addr::UNSPECIFIED;
-        let stream = Stream::new(sd, local_address)
-            .await
-            .map_err(to_error_response)?;
+        let stream = Stream::new(sd, local_address).await?;
         spawn(play(stream, stop.clone()));
 
         Ok(Json("Ok"))
     }
 
     #[oai(path = "/play/url", method = "post")]
-    async fn play_url(&self, Json(url): Json<Url>) -> Result<Json<&'static str>> {
+    async fn play_url(
+        &self,
+        Data(stop): Data<&broadcast::Sender<()>>,
+        Json(url): Json<Url>,
+    ) -> Result<Json<&'static str>> {
+        stop.send(()).convert()?;
+        sleep(Duration::from_millis(100)).await;
+
         log::info!("Playing SDP from URL: {url}");
-        // TODO
+
+        let local_address = Ipv4Addr::UNSPECIFIED;
+        let sd = session_descriptor_from_sdp_url(&url).await?;
+        let stream = Stream::new(sd, local_address).await?;
+        spawn(play(stream, stop.clone()));
+
         Ok(Json("Ok"))
     }
 
     #[oai(path = "/play/sdp", method = "post")]
-    async fn play_sdp(&self, PlainText(sdp): PlainText<String>) -> Result<Json<&'static str>> {
+    async fn play_sdp(
+        &self,
+        Data(stop): Data<&broadcast::Sender<()>>,
+        PlainText(sdp): PlainText<String>,
+    ) -> Result<Json<&'static str>> {
+        stop.send(()).convert()?;
+        sleep(Duration::from_millis(100)).await;
+
         log::info!("Playing SDP: {sdp}");
-        // TODO
+
+        let local_address = Ipv4Addr::UNSPECIFIED;
+        let sd = session_descriptor_from_sdp_str(&sdp).await?;
+        let stream = Stream::new(sd, local_address).await?;
+        spawn(play(stream, stop.clone()));
+
         Ok(Json("Ok"))
     }
 
@@ -59,7 +89,7 @@ impl Api {
     #[oai(path = "/stop", method = "post")]
     async fn stop(&self, Data(stop): Data<&broadcast::Sender<()>>) -> Result<Json<&'static str>> {
         log::info!("Stopping receiver");
-        stop.send(()).map_err(|e| to_error_response(e.into()))?;
+        stop.send(()).convert()?;
         Ok(Json("Ok"))
     }
 
@@ -76,10 +106,6 @@ impl Api {
         // TODO
         Ok(Json("Ok"))
     }
-}
-
-fn to_error_response(e: SdpPlayerError) -> poem::Error {
-    poem::Error::new(e, StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 pub async fn start() -> anyhow::Result<()> {

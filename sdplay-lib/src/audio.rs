@@ -153,9 +153,12 @@ where
         let buffer_size = buf.len();
 
         while ready_samples.len() < buffer_size {
-            let new_data = rx.recv().expect("no more audio data");
-            let new_samples = converter(&new_data);
-            ready_samples.extend(new_samples);
+            if let Ok(new_data) = rx.recv() {
+                let new_samples = converter(&new_data);
+                ready_samples.extend(new_samples);
+            } else {
+                break;
+            }
         }
 
         if let Err(e) = meter_tx.send(ready_samples.clone()) {
@@ -164,7 +167,7 @@ where
 
         let mut output = buf.iter_mut();
 
-        for s in ready_samples.drain(0..buffer_size) {
+        for s in ready_samples.drain(0..buffer_size.min(ready_samples.len())) {
             let sample = output.next().expect("buffer overflow");
             *sample = T::from_sample::<f32>(s);
         }

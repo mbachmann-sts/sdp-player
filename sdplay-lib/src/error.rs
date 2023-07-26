@@ -5,6 +5,8 @@ use std::{
 };
 
 use cpal::{BuildStreamError, DeviceNameError, PlayStreamError};
+use http::StatusCode;
+use poem::error::ResponseError;
 use rtp_rs::RtpReaderError;
 use thiserror::Error;
 use tokio::sync::{broadcast, mpsc::error::SendError};
@@ -107,3 +109,28 @@ impl SdpPlayerError {
 }
 
 pub type SdpPlayerResult<T> = Result<T, SdpPlayerError>;
+
+pub trait ToSdpPlayerResult<E, V> {
+    fn convert(self) -> SdpPlayerResult<V>
+    where
+        E: Into<SdpPlayerError>;
+}
+
+impl<E, V> ToSdpPlayerResult<E, V> for Result<V, E> {
+    fn convert(self) -> SdpPlayerResult<V>
+    where
+        E: Into<SdpPlayerError>,
+    {
+        match self {
+            Ok(it) => Ok(it),
+            Err(e) => Err(e.into()),
+        }
+    }
+}
+
+impl ResponseError for SdpPlayerError {
+    fn status(&self) -> StatusCode {
+        // TODO do this in a more elaborate way
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
+}

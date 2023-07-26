@@ -1,8 +1,34 @@
 ### stop
 POST http://localhost:8080/openapi/stop HTTP/1.1
 
-### play
+### play from descriptor
 POST http://localhost:8080/openapi/play/descriptor HTTP/1.1
-content-type: application/json
+content-type: application/json;charset=UTF-8
 
 {"multicast_address":"239.69.32.100","multicast_port":5004,"bit_depth":"L24","channels":2,"sample_rate":48000,"packet_time":1}
+
+
+### play from raw SDP
+POST http://localhost:8080/openapi/play/sdp HTTP/1.1
+content-type: text/plain;charset=UTF-8
+
+v=0
+o=- 317041530310656 317041530310656 IN IP4 10.1.255.252
+s=CE18707 Sender - CE18707 Audio Sender 0
+t=0 0
+m=audio 5004 RTP/AVP 98
+c=IN IP4 239.0.0.1/128
+a=rtcp:5005
+a=source-filter: incl IN IP4 239.0.0.1 10.1.255.252
+a=rtpmap:98 L16/48000/8
+a=fmtp:98 channel-order=SMPTE2110.(U08); measuredsamplerate=47999;
+a=mediaclk:direct=0
+a=ts-refclk:ptp=IEEE1588-2008:00-20-FC-FF-FE-34-73-71:0
+a=ptime:0.125
+
+
+### play from SDP URL
+POST http://localhost:8080/openapi/play/url HTTP/1.1
+content-type: application/json;charset=UTF-8
+
+"http://10.1.255.252:5050/x-manufacturer/senders/ce187070-000a-102b-bb00-000000000000/stream.sdp"

@@ -203,6 +203,13 @@ pub async fn session_descriptor_from_sdp_file(
     sdp_content.parse()
 }
 
+pub async fn session_descriptor_from_sdp_str(
+    sdp_content: &str,
+) -> SdpPlayerResult<SessionDescriptor> {
+    log::debug!("SDP: \n{sdp_content}");
+    sdp_content.parse()
+}
+
 fn parse_line(line: &str) -> SdpPlayerResult<Option<(&str, SdpValue)>> {
     let trim = line.trim();
 
