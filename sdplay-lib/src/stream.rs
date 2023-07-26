@@ -58,12 +58,24 @@ impl Stream {
         let mut stop = stop.subscribe();
 
         spawn(async move {
+            let mut previous_sequence_number = None;
             loop {
                 select! {
                     _ = stop.recv() => { break; },
                     recv = receive_rtp_payload(&socket, &mut buf) => {
                         match recv {
-                            Ok(Some(payload)) => {
+                            Ok(Some((payload,sequence_number))) => {
+
+                                if let Some(previous_sequence_number) = previous_sequence_number {
+                                    let diff = sequence_number - previous_sequence_number;
+                                    if diff < 1 && !(sequence_number == 0 && previous_sequence_number == 65535) {
+                                        log::warn!("Inconsistent RTP sequence number '{sequence_number}', previous was {previous_sequence_number}")
+                                    } else if diff > 1 {
+                                        log::warn!("Detected packet loss, {} packet(s) were not received", diff-1);
+                                    }
+                                }
+                                previous_sequence_number = Some(sequence_number);
+
                                 if start.elapsed().as_secs_f32() >= 1.0 {
                                     log::debug!(
                                         "Receiving {} packets/s; payload size: {}",
@@ -97,13 +109,17 @@ impl Stream {
     }
 }
 
-async fn receive_rtp_payload(sock: &UdpSocket, buf: &mut [u8]) -> SdpPlayerResult<Option<Vec<u8>>> {
+async fn receive_rtp_payload(
+    sock: &UdpSocket,
+    buf: &mut [u8],
+) -> SdpPlayerResult<Option<(Vec<u8>, i32)>> {
     let len = sock.recv(buf).await?;
     if len > 0 {
         let rtp = RtpReader::new(&buf[0..len]).map_err(|e| SdpPlayerError::RtpReaderError(e))?;
         let end = rtp.payload().len() - rtp.padding().unwrap_or(0) as usize;
         let data = (&rtp.payload()[0..end]).to_owned();
-        Ok(Some(data))
+        let sequence_number: u16 = rtp.sequence_number().into();
+        Ok(Some((data, sequence_number as i32)))
     } else {
         Ok(None)
     }

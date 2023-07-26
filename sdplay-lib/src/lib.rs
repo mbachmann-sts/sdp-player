@@ -23,7 +23,9 @@ impl SessionDescriptor {
         let packet_time = self.packet_time;
         let sample_rate = self.sample_rate;
         let channels = self.channels;
-        ((channels as f64 * packet_time as f64 * sample_rate as f64) / 1_000.0) as u32
+        let bit_depth = self.bit_depth.bits();
+        ((channels as f64 * packet_time as f64 * sample_rate as f64 * bit_depth as f64) / 1_000.0)
+            as u32
     }
 }
 

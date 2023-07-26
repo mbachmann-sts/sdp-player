@@ -27,8 +27,22 @@ pub async fn play(mut stream: Stream, stop: broadcast::Sender<()>) -> SdpPlayerR
             .parse()
             .map_err(SdpPlayerError::invalid_buffer_multiplier)?;
 
+        let packet_size = descriptor.buffer_size();
+        let buffer_frames = (packet_size as f32
+            / descriptor.channels as f32
+            / descriptor.bit_depth.bits() as f32) as u32;
+        let receiver_buffer_frames = buffer_frames * buffer_multiplier;
+
+        log::debug!(
+            "Buffer size: {} frames / {} ms; requested receiver buffer size: {} frames / {} ms)",
+            buffer_frames,
+            descriptor.packet_time,
+            receiver_buffer_frames,
+            descriptor.packet_time * buffer_multiplier as f32
+        );
+
         let config = StreamConfig {
-            buffer_size: cpal::BufferSize::Fixed(descriptor.buffer_size() * buffer_multiplier),
+            buffer_size: cpal::BufferSize::Fixed(receiver_buffer_frames),
             channels: descriptor.channels,
             sample_rate: SampleRate(descriptor.sample_rate),
         };
@@ -91,11 +105,14 @@ pub async fn play(mut stream: Stream, stop: broadcast::Sender<()>) -> SdpPlayerR
             }
         });
 
+        let sample_rate = descriptor.sample_rate;
+        let channels = descriptor.channels as usize;
         thread::spawn(move || {
             let mut start = Instant::now();
             let mut level = 0.0;
 
             while let Ok(samples) = meter_rx.recv() {
+                let buffer_size = samples.len();
                 for s in samples {
                     let l = s.abs();
                     if l > level {
@@ -104,7 +121,13 @@ pub async fn play(mut stream: Stream, stop: broadcast::Sender<()>) -> SdpPlayerR
                 }
                 if start.elapsed().as_secs_f32() >= 1.0 {
                     let db = 20.0 * level.log10();
+                    let actual_buffer_frames = buffer_size / channels;
                     log::debug!("Audio level: {db:.2} dB");
+                    log::debug!(
+                        "Actual receiver buffer size: {} frames / {} ms",
+                        actual_buffer_frames,
+                        (actual_buffer_frames * 1000) / sample_rate as usize
+                    );
                     start = Instant::now();
                     level = 0.0;
                 }
@@ -161,7 +184,7 @@ where
             }
         }
 
-        if let Err(e) = meter_tx.send(ready_samples.clone()) {
+        if let Err(e) = meter_tx.send((&ready_samples[0..buffer_size]).to_owned()) {
             log::error!("Error forwarding meter values: {e}");
         }
 
