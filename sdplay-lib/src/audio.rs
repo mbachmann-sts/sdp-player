@@ -22,12 +22,10 @@ pub async fn play(mut stream: Stream, stop: broadcast::Sender<()>) -> SdpPlayerR
         let default_config = device.default_output_config().unwrap();
         log::info!("Default output config: {:?}", default_config);
 
-        let buffer_multiplier: u32 = dbg!(env::var("BUFFER_MULTIPLIER"))
+        let buffer_multiplier: u32 = env::var("BUFFER_MULTIPLIER")
             .ok()
             .and_then(|m| m.parse::<u32>().ok())
             .unwrap_or(45 * descriptor.channels as u32);
-
-        dbg!(buffer_multiplier);
 
         let packet_size = descriptor.buffer_size();
         let buffer_frames = (packet_size as f32
