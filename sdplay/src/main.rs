@@ -80,6 +80,16 @@ async fn main() -> anyhow::Result<()> {
     if let Some(preset) = args.preset {
         play_preset(preset, tx_stop).await?;
     } else if let Some(sdp_url) = args.url {
+        if let Some(name) = args.save {
+            let preset = Preset {
+                name,
+                sdp_url: Some(sdp_url.to_owned()),
+                ..Default::default()
+            };
+            if let Err(e) = save_preset(preset).await {
+                log::error!("Could not save preset: {e}");
+            }
+        }
         play_sdp_url(&sdp_url, tx_stop).await?;
     } else if let Some(sdp_file) = args.file {
         let sdp_file = sdp_file.canonicalize()?;
